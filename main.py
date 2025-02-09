@@ -1,38 +1,110 @@
 import requests
 import json
+import schedule
+import time
+from datetime import datetime
+from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Enum
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
 
-city = "Seoul"
-apikey = ""
-lang = "ko"
 
-api = f"http://api.openweathermap.org/data/2.5/weather?q={city}&appid={apikey}&lang={lang}&units=metric"
+# pip install sqlalchemy
+# pip install pymysql
+# DB 설정
+DATABASE_URL = "mysql+pymysql://root:Lee289473007216!@localhost:3306/weatherfit?charset=utf8mb4"
+engine = create_engine(
+    DATABASE_URL,
+    pool_recycle=3600,
+    pool_size=5,
+    max_overflow=10
+)
+Base = declarative_base()
 
-result = requests.get(api)
-data = json.loads(result.text)
+# 기존 테이블 구조에 맞게 모델 수정
+class WeatherData(Base):
+    __tablename__ = 'weather'  
+    
+    Weather_range_Id = Column(Integer, primary_key=True)
+    min_temp = Column(Integer)
+    max_temp = Column(Integer)
+    weather_condition = Column(Enum('HOT', 'WARM', 'MID', 'COLD', 'CHILL', name='weather_condition_enum'))
+    latitude = Column(Integer)
+    longitude = Column(Integer)
+    weather_date = Column(DateTime)
+    weather_time = Column(String(50))
+    current_temp = Column(Integer)
 
-if result.status_code != 200:
-    print(f"에러 발생: {data.get('message', '알 수 없는 에러')}")
-else:
-    print(data["name"],"의 날씨입니다.")
-    # 자세한 날씨 : weather - description
-    print("날씨는 ",data["weather"][0]["description"],"입니다.")
-    # 현재 온도 : main - temp
-    print("현재 온도는 ",data["main"]["temp"],"입니다.")
-    # 체감 온도 : main - feels_like
-    print("하지만 체감 온도는 ",data["main"]["feels_like"],"입니다.")
-    # 최저 기온 : main - temp_min
-    print("최저 기온은 ",data["main"]["temp_min"],"입니다.")
-    # 최고 기온 : main - temp_max
-    print("최고 기온은 ",data["main"]["temp_max"],"입니다.")
-    # 습도 : main - humidity
-    print("습도는 ",data["main"]["humidity"],"입니다.")
-    # 기압 : main - pressure
-    print("기압은 ",data["main"]["pressure"],"입니다.")
-    # 풍향 : wind - deg
-    print("풍향은 ",data["wind"]["deg"],"입니다.")
-    # 풍속 : wind - speed
-    print("풍속은 ",data["wind"]["speed"],"입니다.")
+# DB 세션 생성
+Session = sessionmaker(bind=engine)
 
-	 
-# 1시간 마다 실시간 반영
-# 가져온 데이터 DB에 저장하고, SPringBoot에서 콜하면 될 듯.
+def map_weather_condition(api_condition):
+    # OpenWeather API 응답을 enum 값으로 매핑
+    condition_mapping = {
+        '맑음': 'HOT',
+        '흐림': 'MID',
+        '약간 흐림': 'MID',
+        '구름': 'MID',
+        '구름 조금': 'MID',
+        '구름 많음': 'MID',
+        '비': 'COLD',
+        '눈': 'CHILL',
+        'few clouds': 'MID',
+        'clear sky': 'HOT',
+        'scattered clouds': 'MID',
+        'broken clouds': 'MID',
+        'shower rain': 'COLD',
+        'rain': 'COLD',
+        'thunderstorm': 'COLD',
+        'snow': 'CHILL',
+        'mist': 'COLD'
+    }
+    return condition_mapping.get(api_condition, 'MID')  # 기본값은 'MID'
+
+def get_weather_data():
+    city = "Seoul"
+    apikey = "a9f63a12503b84b4885a74632dab5ab3"
+    lang = "ko"
+    
+    api = f"http://api.openweathermap.org/data/2.5/weather?q={city}&appid={apikey}&lang={lang}&units=metric"
+    
+    try:
+        result = requests.get(api)
+        data = json.loads(result.text)
+        
+        if result.status_code == 200:
+            current_datetime = datetime.now()
+            
+            session = Session()
+            weather_data = WeatherData(
+                min_temp=int(data["main"]["temp_min"]),
+                max_temp=int(data["main"]["temp_max"]),
+                weather_condition=map_weather_condition(data["weather"][0]["description"]),
+                latitude=int(data["coord"]["lat"]),
+                longitude=int(data["coord"]["lon"]),
+                weather_date=current_datetime.date(),
+                weather_time=current_datetime.strftime("%H:%M:%S"),
+                current_temp=int(data["main"]["temp"])
+            )
+            
+            session.add(weather_data)
+            session.commit()
+            session.close()
+            
+            print(f"{datetime.now()}: 날씨 데이터가 성공적으로 저장되었습니다.")
+            
+        else:
+            print(f"에러 발생: {data.get('message', '알 수 없는 에러')}")
+            
+    except Exception as e:
+        print(f"데이터 저장 중 오류 발생: {str(e)}")
+
+# 1시간마다 데이터 수집
+schedule.every(1).hours.do(get_weather_data)
+
+# 프로그램 시작시 즉시 첫 데이터 수집
+get_weather_data()
+
+# 스케줄러 실행
+while True:
+    schedule.run_pending()
+    time.sleep(1)
