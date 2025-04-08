@@ -27,38 +27,34 @@ class WeatherData(Base):
     Weather_range_Id = Column(Integer, primary_key=True)
     min_temp = Column(Integer)
     max_temp = Column(Integer)
-    weather_condition = Column(Enum('HOT', 'WARM', 'MID', 'COLD', 'CHILL', name='weather_condition_enum'))
+    weather_condition = Column(Enum('HOT', 'WARM', 'MID', 'COLD', 'CHILL', 'RAIN', 'SNOW', name='weather_condition_enum'))
     latitude = Column(Integer)
     longitude = Column(Integer)
     weather_date = Column(DateTime)
     weather_time = Column(String(50))
     current_temp = Column(Integer)
+    humidity = Column(Integer, nullable=False)
+    wind_speed = Column(Float, nullable=False)
 
 # DB 세션 생성
 Session = sessionmaker(bind=engine)
 
-def map_weather_condition(api_condition):
-    # OpenWeather API 응답을 enum 값으로 매핑
-    condition_mapping = {
-        '맑음': 'HOT',
-        '흐림': 'MID',
-        '약간 흐림': 'MID',
-        '구름': 'MID',
-        '구름 조금': 'MID',
-        '구름 많음': 'MID',
-        '비': 'COLD',
-        '눈': 'CHILL',
-        'few clouds': 'MID',
-        'clear sky': 'HOT',
-        'scattered clouds': 'MID',
-        'broken clouds': 'MID',
-        'shower rain': 'COLD',
-        'rain': 'COLD',
-        'thunderstorm': 'COLD',
-        'snow': 'CHILL',
-        'mist': 'COLD'
-    }
-    return condition_mapping.get(api_condition, 'MID')  # 기본값은 'MID'
+def map_weather_condition(api_condition, temp):
+    # 비/눈 상태 우선 확인
+    if any(keyword in api_condition.lower() for keyword in ['rain', 'shower', 'thunderstorm', '비']):
+        return 'RAIN'
+    elif any(keyword in api_condition.lower() for keyword in ['snow', '눈']):
+        return 'SNOW'
+    
+    # 비/눈이 아닌 경우 기온 기준으로 판단
+    if temp >= 28:
+        return 'HOT'
+    elif temp >= 20:
+        return 'WARM'
+    elif temp >= 5:
+        return 'COLD'
+    else:
+        return 'CHILL'
 
 def get_weather_data():
     city = "Seoul"
@@ -78,12 +74,14 @@ def get_weather_data():
             weather_data = WeatherData(
                 min_temp=int(data["main"]["temp_min"]),
                 max_temp=int(data["main"]["temp_max"]),
-                weather_condition=map_weather_condition(data["weather"][0]["description"]),
+                weather_condition=map_weather_condition(data["weather"][0]["description"], data["main"]["temp"]),
                 latitude=int(data["coord"]["lat"]),
                 longitude=int(data["coord"]["lon"]),
                 weather_date=current_datetime.date(),
                 weather_time=current_datetime.strftime("%H:%M:%S"),
-                current_temp=int(data["main"]["temp"])
+                current_temp=int(data["main"]["temp"]),
+                humidity=data["main"]["humidity"],
+                wind_speed=data["wind"]["speed"]
             )
             
             session.add(weather_data)

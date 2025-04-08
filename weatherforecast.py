@@ -8,38 +8,6 @@ from datetime import datetime
 from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Enum
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
-import enum
-
-# WeatherCondition Enum 정의
-class WeatherCondition(enum.Enum):
-    HOT = "HOT"
-    WARM = "WARM" 
-    MID = "MID"
-    COLD = "COLD"
-    CHILL = "CHILL"
-
-def map_weather_condition(api_condition):
-    # OpenWeather API 응답을 enum 값으로 매핑
-    condition_mapping = {
-        '맑음': 'HOT',
-        '흐림': 'MID',
-        '약간 흐림': 'MID',
-        '구름': 'MID',
-        '구름 조금': 'MID',
-        '구름 많음': 'MID',
-        '비': 'COLD',
-        '눈': 'CHILL',
-        'few clouds': 'MID',
-        'clear sky': 'HOT',
-        'scattered clouds': 'MID',
-        'broken clouds': 'MID',
-        'shower rain': 'COLD',
-        'rain': 'COLD',
-        'thunderstorm': 'COLD',
-        'snow': 'CHILL',
-        'mist': 'COLD'
-    }
-    return condition_mapping.get(api_condition, 'MID')  # 기본값은 'MID'
 
 # DB 연결 설정
 DATABASE_URL = "mysql+pymysql://root:Lee289473007216!@localhost:3306/weatherfit?charset=utf8mb4"
@@ -57,23 +25,28 @@ class WeatherForecast(Base):
     temp_min = Column(Float, nullable=False)
     temp_max = Column(Float, nullable=False)
     humidity = Column(Integer, nullable=False)
-    weather_condition = Column(Enum(WeatherCondition), nullable=False)
+    wind_speed = Column(Float, nullable=False)
+    weather_condition = Column(Enum('HOT', 'WARM', 'RAIN', 'COLD', 'CHILL', 'SNOW', name='weather_condition'))
     description = Column(String(100), nullable=False)
     latitude = Column(Float, nullable=False)
     longitude = Column(Float, nullable=False)
 
-# 기온에 따른 날씨 상태 결정
-def determine_weather_condition(temp):
-    if temp >= 30:
-        return WeatherCondition.HOT
+def map_weather_condition(api_condition, temp):
+    # 비/눈 상태 우선 확인
+    if any(keyword in api_condition.lower() for keyword in ['rain', 'shower', 'thunderstorm', '비']):
+        return 'RAIN'
+    elif any(keyword in api_condition.lower() for keyword in ['snow', '눈']):
+        return 'SNOW'
+    
+    # 비/눈이 아닌 경우 기온 기준으로 판단
+    if temp >= 28:
+        return 'HOT'
     elif temp >= 20:
-        return WeatherCondition.WARM
-    elif temp >= 10:
-        return WeatherCondition.MID
-    elif temp >= 0:
-        return WeatherCondition.COLD
+        return 'WARM'
+    elif temp >= 5:
+        return 'COLD'
     else:
-        return WeatherCondition.CHILL
+        return 'CHILL'
 
 def get_weather_forecast():
     city = "Seoul"
@@ -100,7 +73,11 @@ def get_weather_forecast():
                     temp_min=forecast['main']['temp_min'],
                     temp_max=forecast['main']['temp_max'],
                     humidity=forecast['main']['humidity'],
-                    weather_condition=WeatherCondition[map_weather_condition(forecast['weather'][0]['description'])],
+                    wind_speed=forecast['wind']['speed'],
+                    weather_condition=map_weather_condition(
+                        forecast['weather'][0]['description'],
+                        forecast['main']['temp']
+                    ),
                     description=forecast['weather'][0]['description'],
                     latitude=data['city']['coord']['lat'],
                     longitude=data['city']['coord']['lon']
