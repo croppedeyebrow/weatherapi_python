@@ -33,8 +33,8 @@ class WeatherData(Base):
     weather_date = Column(DateTime)
     weather_time = Column(String(50))
     current_temp = Column(Integer)
-    humidity = Column(Integer, nullable=False)
-    wind_speed = Column(Float, nullable=False)
+    current_humidity = Column(Integer, nullable=False)
+    current_wind_speed = Column(Float, nullable=False)
 
 # DB 세션 생성
 Session = sessionmaker(bind=engine)
@@ -80,8 +80,8 @@ def get_weather_data():
                 weather_date=current_datetime.date(),
                 weather_time=current_datetime.strftime("%H:%M:%S"),
                 current_temp=int(data["main"]["temp"]),
-                humidity=data["main"]["humidity"],
-                wind_speed=data["wind"]["speed"]
+                current_humidity=data["main"]["humidity"],
+                current_wind_speed=data["wind"]["speed"]
             )
             
             session.add(weather_data)
