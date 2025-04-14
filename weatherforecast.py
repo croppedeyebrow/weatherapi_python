@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Enum, func
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
+from currentweather import WeatherData
 
 
 # DB 연결 설정
@@ -91,6 +92,84 @@ def interpolate_hourly_data(forecast_list):
     
     return hourly_data
 
+def get_current_weather_data(session):
+    # 가장 최근의 현재 날씨 데이터 조회
+    current_weather = session.query(WeatherData).order_by(
+        func.concat(WeatherData.weather_date, ' ', WeatherData.weather_time).desc()
+    ).first()
+    
+    if current_weather:
+        return {
+            'time': datetime.combine(current_weather.weather_date, datetime.strptime(current_weather.weather_time, '%H:%M:%S').time()),
+            'temp': float(current_weather.current_temp),
+            'temp_min': float(current_weather.min_temp),
+            'temp_max': float(current_weather.max_temp),
+            'humidity': current_weather.current_humidity,
+            'wind_speed': current_weather.current_wind_speed,
+            'description': current_weather.weather_condition
+        }
+    return None
+
+def interpolate_with_current_data(current_data, forecast_list):
+    hourly_data = []
+    
+    if not current_data:
+        print("현재 날씨 데이터가 없습니다.")
+        return interpolate_hourly_data(forecast_list)
+    
+    current_time = current_data['time']
+    first_forecast = forecast_list[0]
+    first_forecast_time = datetime.fromtimestamp(first_forecast['dt'])
+    
+    print(f"현재 시각: {current_time}")
+    print(f"첫 예보 시각: {first_forecast_time}")
+    
+    # 현재 시점 데이터 추가
+    hourly_data.append({
+        'time': current_time,
+        'temp': current_data['temp'],
+        'temp_min': current_data['temp_min'],
+        'temp_max': current_data['temp_max'],
+        'humidity': current_data['humidity'],
+        'wind_speed': current_data['wind_speed'],
+        'description': first_forecast['weather'][0]['description']  # API 응답의 설명 사용
+    })
+    
+    # 현재 시점과 첫 번째 예보 사이 보간
+    hours_diff = (first_forecast_time - current_time).total_seconds() / 3600
+    print(f"시간 차이: {hours_diff}시간")
+    
+    if hours_diff > 0:
+        # 다음 정시까지의 시간을 계산
+        next_hour = current_time.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+        print(f"다음 정시: {next_hour}")
+        
+        # 현재 시각부터 예보 시각까지 1시간 단위로 보간
+        current_hour = next_hour
+        while current_hour < first_forecast_time:
+            progress = (current_hour - current_time).total_seconds() / (first_forecast_time - current_time).total_seconds()
+            print(f"보간 시각: {current_hour}, 진행률: {progress}")
+            
+            interpolated_data = {
+                'time': current_hour,
+                'temp': current_data['temp'] * (1-progress) + first_forecast['main']['temp'] * progress,
+                'temp_min': current_data['temp_min'] * (1-progress) + first_forecast['main']['temp_min'] * progress,
+                'temp_max': current_data['temp_max'] * (1-progress) + first_forecast['main']['temp_max'] * progress,
+                'humidity': int(current_data['humidity'] * (1-progress) + first_forecast['main']['humidity'] * progress),
+                'wind_speed': current_data['wind_speed'] * (1-progress) + first_forecast['wind']['speed'] * progress,
+                'description': first_forecast['weather'][0]['description']
+            }
+            hourly_data.append(interpolated_data)
+            current_hour += timedelta(hours=1)
+    
+    # 나머지 예보 데이터 보간
+    forecast_data = interpolate_hourly_data(forecast_list)
+    print(f"예보 데이터 개수: {len(forecast_data)}")
+    hourly_data.extend(forecast_data)
+    
+    print(f"총 생성된 데이터 개수: {len(hourly_data)}")
+    return hourly_data
+
 def get_weather_forecast():
     lat = 37.5683
     lon = 126.9778
@@ -105,8 +184,15 @@ def get_weather_forecast():
         if response.status_code == 200:
             session = sessionmaker(bind=engine)()
             
-            # 3시간 간격 데이터를 1시간 간격으로 보간
-            hourly_data = interpolate_hourly_data(data['list'])
+            # 현재 날씨 데이터 가져오기
+            current_data = get_current_weather_data(session)
+            print(f"현재 날씨 데이터: {current_data}")
+            
+            # API 응답 데이터 확인
+            print(f"API 응답 첫 번째 예보: {data['list'][0]}")
+            
+            # 현재 데이터와 예보 데이터 사이 보간 수행
+            hourly_data = interpolate_with_current_data(current_data, data['list'])
             
             current_time = datetime.now()
             
