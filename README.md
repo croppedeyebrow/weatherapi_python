@@ -283,3 +283,92 @@ engine = create_engine(
    - 추가 기상 정보 수집
    - 데이터 분석 기능 추가
    - API 서비스 구축
+
+### 6. 주요 오류 해결 기록
+
+#### 6.1 스케줄러 충돌 문제
+
+**문제**:
+
+- `weatherforecast.py`에서 `from currentweather import WeatherData`를 import하면서 `currentweather.py`의 스케줄러가 함께 실행되는 문제 발생
+- 두 스케줄러가 동시에 실행되어 충돌 발생
+
+**해결**:
+
+- 공통 모델과 설정을 `models.py`로 분리
+- 각 스크립트의 실행 로직을 `if __name__ == "__main__":`으로 분리
+- 데이터베이스 모델과 유틸리티 함수를 공유하면서도 독립적으로 실행되도록 개선
+
+```python
+# models.py - 공통 모델 정의
+from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Enum
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
+
+class WeatherData(Base):
+    __tablename__ = 'weather'
+    # ... 모델 정의 ...
+
+class WeatherForecast(Base):
+    __tablename__ = 'weather_forecast'
+    # ... 모델 정의 ...
+```
+
+#### 6.2 위치 정보 참조 오류
+
+**문제**:
+
+- OpenWeather API의 forecast 응답에서 `name` 필드를 직접 참조하려고 시도하여 오류 발생
+- 예보 데이터의 각 시간별 데이터에는 도시 정보가 포함되어 있지 않음
+
+**해결**:
+
+- API 응답의 최상위 레벨에 있는 `city` 객체에서 위치 정보를 추출하도록 수정
+- 위치 정보를 함수 매개변수로 전달하여 모든 보간 데이터에 일관되게 적용
+- 국가 코드가 'KR'인 경우 "대한민국" 추가하여 위치 정보 상세화
+
+```python
+location_parts = []
+if "city" in data:
+    if "name" in data["city"]:
+        location_parts.append(data["city"]["name"])
+    if "country" in data["city"] and data["city"]["country"] == "KR":
+        location_parts.append("대한민국")
+
+location_name = " ".join(location_parts) if location_parts else "서울"
+```
+
+#### 6.3 데이터 연속성 및 세션 관리
+
+**문제**:
+
+- 데이터베이스 세션이 적절히 닫히지 않는 문제
+- 예외 발생 시 세션 롤백이 누락되는 경우 발생
+- 오래된 데이터가 계속 누적되는 문제
+
+**해결**:
+
+- 세션 관리를 try-finally 블록으로 개선
+- 예외 처리 시 명시적 롤백 추가
+- 48시간 이전의 오래된 데이터 자동 삭제 로직 구현
+- 데이터베이스 연결 풀 설정 최적화
+
+```python
+try:
+    # 데이터베이스 작업 수행
+    session.commit()
+except Exception as e:
+    print(f"오류 발생: {str(e)}")
+    session.rollback()
+finally:
+    session.close()
+```
+
+### 7. 시스템 모니터링 및 개선사항
+
+#### 7.1 현재 구현된 모니터링
+
+- API 요청 URL 및 응답 상태 코드 로깅
+- 데이터 처리 단계별 상세 로그 출력
+- 예외 발생 시 상세 에러 메시지 기록
+- 데이터 수집 및 보간 결과 수량 확인

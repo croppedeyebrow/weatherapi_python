@@ -6,6 +6,7 @@ from datetime import datetime
 from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Enum
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
+from models import Session, WeatherData, map_weather_condition
 
 
 # pip install sqlalchemy
@@ -28,8 +29,9 @@ class WeatherData(Base):
     min_temp = Column(Integer)
     max_temp = Column(Integer)
     weather_condition = Column(Enum('HOT', 'WARM', 'MID', 'COLD', 'CHILL', 'RAIN', 'SNOW', name='weather_condition_enum'))
-    latitude = Column(Integer)
-    longitude = Column(Integer)
+    latitude = Column(Float)
+    longitude = Column(Float)
+    location_name = Column(String(100))
     weather_date = Column(DateTime)
     weather_time = Column(String(50))
     current_temp = Column(Integer)
@@ -39,29 +41,14 @@ class WeatherData(Base):
 # DB 세션 생성
 Session = sessionmaker(bind=engine)
 
-def map_weather_condition(api_condition, temp):
-    # 비/눈 상태 우선 확인
-    if any(keyword in api_condition.lower() for keyword in ['rain', 'shower', 'thunderstorm', '비']):
-        return 'RAIN'
-    elif any(keyword in api_condition.lower() for keyword in ['snow', '눈']):
-        return 'SNOW'
-    
-    # 비/눈이 아닌 경우 기온 기준으로 판단
-    if temp >= 28:
-        return 'HOT'
-    elif temp >= 20:
-        return 'WARM'
-    elif temp >= 5:
-        return 'COLD'
-    else:
-        return 'CHILL'
-
 def get_weather_data():
-    city = "Seoul"
+    # 좀 더 구체적인 위치 정보로 API 요청
+    lat = 37.5683  # 서울시청 위치
+    lon = 126.9778
     apikey = "a9f63a12503b84b4885a74632dab5ab3"
     lang = "ko"
     
-    api = f"http://api.openweathermap.org/data/2.5/weather?q={city}&appid={apikey}&lang={lang}&units=metric"
+    api = f"http://api.openweathermap.org/data/2.5/weather?lat={lat}&lon={lon}&appid={apikey}&lang={lang}&units=metric"
     
     try:
         result = requests.get(api)
@@ -70,39 +57,88 @@ def get_weather_data():
         if result.status_code == 200:
             current_datetime = datetime.now()
             
+            # 위치 정보 구성
+            location_parts = []
+            if "name" in data:
+                location_parts.append(data["name"])
+            if "sys" in data and "country" in data["sys"]:
+                if data["sys"]["country"] == "KR":
+                    location_parts.append("대한민국")
+            
+            location_name = " ".join(location_parts)
+            
             session = Session()
-            weather_data = WeatherData(
-                min_temp=int(data["main"]["temp_min"]),
-                max_temp=int(data["main"]["temp_max"]),
-                weather_condition=map_weather_condition(data["weather"][0]["description"], data["main"]["temp"]),
-                latitude=int(data["coord"]["lat"]),
-                longitude=int(data["coord"]["lon"]),
-                weather_date=current_datetime.date(),
-                weather_time=current_datetime.strftime("%H:%M:%S"),
-                current_temp=int(data["main"]["temp"]),
-                current_humidity=data["main"]["humidity"],
-                current_wind_speed=data["wind"]["speed"]
-            )
             
-            session.add(weather_data)
-            session.commit()
-            session.close()
-            
-            print(f"{datetime.now()}: 날씨 데이터가 성공적으로 저장되었습니다.")
+            try:
+                # 가장 최근 데이터 하나만 남기고 모두 삭제
+                latest_data = session.query(WeatherData).order_by(
+                    WeatherData.weather_date.desc(),
+                    WeatherData.weather_time.desc()
+                ).first()
+                
+                if latest_data:
+                    # 최신 데이터보다 오래된 데이터 모두 삭제
+                    session.query(WeatherData).filter(
+                        (WeatherData.weather_date < latest_data.weather_date) |
+                        ((WeatherData.weather_date == latest_data.weather_date) & 
+                         (WeatherData.weather_time < latest_data.weather_time))
+                    ).delete(synchronize_session=False)
+                
+                # 새로운 데이터 추가
+                weather_data = WeatherData(
+                    min_temp=int(data["main"]["temp_min"]),
+                    max_temp=int(data["main"]["temp_max"]),
+                    weather_condition=map_weather_condition(data["weather"][0]["description"], data["main"]["temp"]),
+                    latitude=float(data["coord"]["lat"]),
+                    longitude=float(data["coord"]["lon"]),
+                    location_name=location_name,
+                    weather_date=current_datetime.date(),
+                    weather_time=current_datetime.strftime("%H:%M:%S"),
+                    current_temp=int(data["main"]["temp"]),
+                    current_humidity=data["main"]["humidity"],
+                    current_wind_speed=data["wind"]["speed"]
+                )
+                
+                session.add(weather_data)
+                session.commit()
+                
+                print(f"{datetime.now()}: 날씨 데이터가 성공적으로 업데이트되었습니다.")
+                print(f"위치: {location_name}")
+                print(f"위도: {data['coord']['lat']}, 경도: {data['coord']['lon']}")
+                
+            except Exception as e:
+                print(f"데이터베이스 작업 중 오류 발생: {str(e)}")
+                session.rollback()
+            finally:
+                session.close()
             
         else:
-            print(f"에러 발생: {data.get('message', '알 수 없는 에러')}")
+            print(f"API 호출 실패: {data.get('message', '알 수 없는 에러')}")
             
     except Exception as e:
-        print(f"데이터 저장 중 오류 발생: {str(e)}")
+        print(f"데이터 수집 중 오류 발생: {str(e)}")
 
-# 1시간마다 데이터 수집
-schedule.every(1).hours.do(get_weather_data)
-
-# 프로그램 시작시 즉시 첫 데이터 수집
-get_weather_data()
-
-# 스케줄러 실행
-while True:
-    schedule.run_pending()
-    time.sleep(1)
+if __name__ == "__main__":
+    print("현재 날씨 수집 프로그램이 시작되었습니다.")
+    print("현재 시각:", datetime.now())
+    
+    # 1시간마다 데이터 수집
+    schedule.every(1).hours.do(get_weather_data)
+    
+    # 프로그램 시작시 즉시 첫 데이터 수집
+    try:
+        get_weather_data()
+    except Exception as e:
+        print(f"초기 데이터 수집 중 오류 발생: {str(e)}")
+    
+    print("스케줄러가 시작되었습니다. 1시간 간격으로 데이터를 수집합니다.")
+    
+    # 스케줄러 실행
+    while True:
+        try:
+            schedule.run_pending()
+            time.sleep(60)
+        except Exception as e:
+            print(f"스케줄러 실행 중 오류 발생: {str(e)}")
+            time.sleep(60)
+            continue
