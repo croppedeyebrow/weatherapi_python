@@ -70,19 +70,8 @@ def get_weather_data():
             session = Session()
             
             try:
-                # 가장 최근 데이터 하나만 남기고 모두 삭제
-                latest_data = session.query(WeatherData).order_by(
-                    WeatherData.weather_date.desc(),
-                    WeatherData.weather_time.desc()
-                ).first()
-                
-                if latest_data:
-                    # 최신 데이터보다 오래된 데이터 모두 삭제
-                    session.query(WeatherData).filter(
-                        (WeatherData.weather_date < latest_data.weather_date) |
-                        ((WeatherData.weather_date == latest_data.weather_date) & 
-                         (WeatherData.weather_time < latest_data.weather_time))
-                    ).delete(synchronize_session=False)
+                # 모든 이전 데이터 삭제
+                session.query(WeatherData).delete(synchronize_session=False)
                 
                 # 새로운 데이터 추가
                 weather_data = WeatherData(
